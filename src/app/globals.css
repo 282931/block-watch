@@ -1,26 +1,47 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  color-scheme: light;
+  --color-bg: #ffffff;
+  --color-bg-secondary: #f3f4f6;
+  --color-text: #111827;
+  --color-text-secondary: #4b5563;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+.dark {
+  color-scheme: dark;
+  --color-bg: #0a0a0a;
+  --color-bg-secondary: #1f2937;
+  --color-text: #f9fafb;
+  --color-text-secondary: #d1d5db;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+}
+
+/* 自定义主题类 */
+.theme-bg {
+  background-color: var(--color-bg);
+}
+.theme-bg-secondary {
+  background-color: var(--color-bg-secondary);
+}
+.theme-text {
+  color: var(--color-text);
+}
+.theme-text-secondary {
+  color: var(--color-text-secondary);
+}
+.theme-nav-item:hover {
+  background-color: #e0f2fe;
+  color: #2563eb;
+}
+.theme-nav-item-active {
+  background-color: #e0f2fe !important;
+  color: #2563eb !important;
 }

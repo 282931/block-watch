@@ -3,6 +3,7 @@ import type { NextAuthConfig } from 'next-auth';
 export const authConfig = {
   pages: {
     signIn: '/login',
+    newUser: '/register',
   },
   callbacks: {
     authorized({ auth, request: { nextUrl } }) {
@@ -17,8 +18,8 @@ export const authConfig = {
         return true;
       }
 
-      // 未登录用户只能访问 login 页面
-      if (isOnLogin) {
+      // 未登录用户只能访问 login 和 register 页面
+      if (isOnLogin || nextUrl.pathname === '/register') {
         return true;
       }
 

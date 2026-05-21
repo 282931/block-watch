@@ -1,70 +1,49 @@
 import prisma from '@/app/lib/db';
 import type { WalletAddressWithBalance } from '@/app/lib/definitions';
+import { EtherscanProvider, formatEther } from 'ethers';
 
-const ETH_WEI_FACTOR = BigInt('1000000000000000000');
-const ETHERSCAN_API_URL = 'https://api.etherscan.io/v2/api';
+const ETHEREUM_MAINNET_CHAIN_ID = 1;
 
 export function normalizeWalletAddress(address: string) {
   return address.trim().toLowerCase();
 }
 
-export function formatWeiAsEth(weiValue: string) {
-  const wei = BigInt(weiValue);
-  const eth = wei / ETH_WEI_FACTOR;
-  const fractional = wei % ETH_WEI_FACTOR;
-  const trimmedFractional = fractional
-    .toString()
-    .padStart(18, '0')
-    .replace(/0+$/, '')
-    .slice(0, 6);
+function trimEthBalance(balance: string) {
+  const [whole, fractional = ''] = balance.split('.');
+  const trimmedFractional = fractional.replace(/0+$/, '').slice(0, 6);
 
-  return trimmedFractional ? `${eth}.${trimmedFractional}` : eth.toString();
+  return trimmedFractional ? `${whole}.${trimmedFractional}` : whole;
+}
+
+let provider: EtherscanProvider | null = null;
+
+function getProvider() {
+  if (!provider) {
+    const apiKey = process.env.ETHERSCAN_API_KEY;
+
+    if (!apiKey) {
+      throw new Error('Missing Etherscan API key.');
+    }
+
+    provider = new EtherscanProvider(ETHEREUM_MAINNET_CHAIN_ID, apiKey);
+  }
+
+  return provider;
 }
 
 export async function fetchEthereumBalance(address: string) {
-  const apiKey = process.env.ETHERSCAN_API_KEY;
-
-  if (!apiKey) {
-    throw new Error('Missing Etherscan API key.');
-  }
-
-  const searchParams = new URLSearchParams({
-    chainid: '1',
-    module: 'account',
-    action: 'balance',
-    address,
-    tag: 'latest',
-    apikey: apiKey,
-  });
-
-  const response = await fetch(`${ETHERSCAN_API_URL}?${searchParams}`, {
-    cache: 'no-store',
-  });
-
-  if (!response.ok) {
-    throw new Error('Balance lookup failed.');
-  }
-
-  const payload = (await response.json()) as {
-    status?: string;
-    message?: string;
-    result?: string;
-  };
-
-  if (payload.status !== '1' || !payload.result) {
-    throw new Error(payload.result ?? payload.message ?? 'Balance lookup failed.');
-  }
+  const balanceWei = await getProvider().getBalance(address);
 
   return {
-    balanceWei: BigInt(payload.result).toString(),
-    balanceEth: formatWeiAsEth(payload.result),
+    balanceWei: balanceWei.toString(),
+    balanceEth: trimEthBalance(formatEther(balanceWei)),
   };
 }
 
-export async function getWalletAddressesWithBalances(
+export async function getWalletAddresses(
   userId: string,
 ): Promise<WalletAddressWithBalance[]> {
-  const wallets = await prisma.walletAddress.findMany({
+  return prisma.walletAddress.findMany({
     where: {
       userId,
       chain: 'ethereum',
@@ -73,27 +52,4 @@ export async function getWalletAddressesWithBalances(
       createdAt: 'desc',
     },
   });
-  return wallets.map((wallet) => ({
-    ...wallet,
-    balance: '0',
-    balanceEth: '0',
-  }));
-
-  // return Promise.all(
-  //   wallets.map(async (wallet) => {
-  //     try {
-  //       const balance = await fetchEthereumBalance(wallet.address);
-
-  //       return {
-  //         ...wallet,
-  //         ...balance,
-  //       };
-  //     } catch {
-  //       return {
-  //         ...wallet,
-  //         balanceError: 'Balance unavailable',
-  //       };
-  //     }
-  //   }),
-  // );
 }

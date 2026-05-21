@@ -20,3 +20,11 @@ export type AddWalletAddressState = {
   success?: boolean;
   error?: string;
 };
+
+declare global {
+  interface Window {
+    ethereum?: import('ethers').Eip1193Provider;
+  }
+}
+
+export {};

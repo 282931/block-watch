@@ -2,10 +2,11 @@ import { walletService } from '@/server/wallet/wallet.service';
 import type { WalletAddressWithBalance } from '@/features/wallet/wallet.types';
 import CopyAddressButton from './copy-address-button';
 import DeleteWalletAddressButton from './delete-wallet-address-button';
+import WalletBalance from './wallet-balance';
 
 export default async function WalletItem({ wallet }: { wallet: WalletAddressWithBalance }) {
 
-  const balance = await walletService.getBalance(wallet.address).catch(() => null);
+  const balance = await walletService.getCachedBalance(wallet.address).catch(() => null);
 
   return (
     <li
@@ -14,20 +15,7 @@ export default async function WalletItem({ wallet }: { wallet: WalletAddressWith
     >
       <WalletPureItem wallet={wallet} />
       <div>
-        {!balance ? (
-          <p className="text-sm font-medium text-red-600 dark:text-red-300">
-            Balance unavailable
-          </p>
-        ) : (
-          <>
-            <p className="text-lg font-semibold theme-text">
-              {balance.balanceEth} ETH
-            </p>
-            <p className="mt-1 break-all text-xs theme-text-secondary">
-              {balance.balanceWei} wei
-            </p>
-          </>
-        )}
+        <WalletBalance address={wallet.address} initialBalance={balance} />
       </div>
 
       <DeleteWalletAddressButton

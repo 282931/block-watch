@@ -2,6 +2,7 @@ export type WalletBalanceState = {
   address?: string;
   balanceEth?: string;
   balanceWei?: string;
+  isStale?: boolean;
   error?: string;
 };
 

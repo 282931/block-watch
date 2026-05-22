@@ -4,10 +4,17 @@ import { AuthError, ConflictError, NotFoundError, RateLimitError, ServerError } 
 import { WalletRepository } from '@/server/wallet/wallet.repository';
 import type { AddWalletInput } from '@/server/wallet/wallet.schema';
 import type { WalletAddressWithBalance } from '@/features/wallet/wallet.types';
-import { getRedis, withRedis, BALANCE_CACHE_TTL, BALANCE_CACHE_PREFIX } from '@/server/lib/redis';
+import {
+  BALANCE_CACHE_TTL,
+  BALANCE_REFRESH_LOCK_TTL,
+  buildBalanceCacheKey,
+  buildBalanceRefreshLockKey,
+  withRedis,
+} from '@/server/lib/redis';
 
 const ETHEREUM_MAINNET_CHAIN_ID = 1;
-const BALANCE_STALE_MS = 30_000; // 30 seconds
+const ETHEREUM_CHAIN = 'ethereum';
+const BALANCE_STALE_MS = 30_000;
 
 type BalanceProvider = {
   getBalance(address: string): Promise<bigint>;
@@ -18,6 +25,7 @@ type BalanceProviderFactory = () => BalanceProvider;
 type BalanceResult = {
   balanceEth: string;
   balanceWei: string;
+  isStale: boolean;
 };
 
 function createEtherscanProvider(): BalanceProvider {
@@ -26,6 +34,10 @@ function createEtherscanProvider(): BalanceProvider {
     throw new ServerError('Missing Etherscan API key.');
   }
   return new EtherscanProvider(ETHEREUM_MAINNET_CHAIN_ID, apiKey);
+}
+
+function normalizeAddress(address: string): string {
+  return address.trim().toLowerCase();
 }
 
 function trimEthBalance(balance: string): string {
@@ -40,7 +52,7 @@ export class WalletService {
   constructor(
     private repo: WalletRepository,
     private createProvider: BalanceProviderFactory = createEtherscanProvider,
-  ) {}
+  ) { }
 
   private getProvider(): BalanceProvider {
     if (!this.provider) {
@@ -62,15 +74,16 @@ export class WalletService {
       throw new AuthError('Please log in to add a wallet address.');
     }
 
-    const exists = await this.repo.existsByUserAndAddress(userId, input.address);
+    const address = normalizeAddress(input.address);
+    const exists = await this.repo.existsByUserAndAddress(userId, address);
     if (exists) {
       throw new ConflictError('This wallet address is already in your list.');
     }
 
     return this.repo.create({
       userId,
-      address: input.address,
-      chain: 'ethereum',
+      address,
+      chain: ETHEREUM_CHAIN,
       label: input.label ?? null,
     });
   }
@@ -88,64 +101,86 @@ export class WalletService {
     await this.repo.deleteByIdAndUser(walletId, userId);
   }
 
-  /**
-   * Get wallet balance with Redis-first caching and DB fallback.
-   *
-   * 1. Check Redis → if hit and fresh, return immediately.
-   * 2. If Redis miss → check DB cache.
-   * 3. If DB cache is fresh → populate Redis on read-through, return.
-   * 4. If DB cache is stale (>=30s) → return stale data, fire background refresh.
-   * 5. If no cache → fetch from RPC synchronously, persist to DB + Redis.
-   */
-  async getBalance(address: string): Promise<BalanceResult> {
-    // 1. Try Redis first (fastest)
-    const redisHit = await withRedis(
-      async (redis) => {
-        const raw = await redis.get(`${BALANCE_CACHE_PREFIX}:${address}`);
-        if (!raw) return null;
-        return JSON.parse(raw) as { balanceEth: string; balanceWei: string; updatedAt: number };
-      },
-      (async () => null),
-    );
+  async getCachedBalance(address: string): Promise<BalanceResult | null> {
+    const normalizedAddress = normalizeAddress(address);
 
+    const redisHit = await this.readRedisCache(normalizedAddress);
     if (redisHit) {
-      return { balanceEth: redisHit.balanceEth, balanceWei: redisHit.balanceWei };
+      return { balanceEth: redisHit.balanceEth, balanceWei: redisHit.balanceWei, isStale: false };
     }
 
-    // 2. Redis miss — check DB cache
-    const wallet = await this.repo.findByAddress(address);
-    const cached = wallet?.balanceUpdatedAt
-      ? { balanceEth: wallet.balanceEth!, balanceWei: wallet.balanceWei!, updatedAt: wallet.balanceUpdatedAt }
-      : null;
-
-    if (cached) {
-      const age = Date.now() - cached.updatedAt.getTime();
-      if (age < BALANCE_STALE_MS) {
-        // Fresh DB cache – populate Redis on read-through
-        void this.writeRedisCache(address, cached.balanceEth, cached.balanceWei);
-        return { balanceEth: cached.balanceEth, balanceWei: cached.balanceWei };
-      }
-
-      // Stale cache – return stale data and refresh in background
-      this.refreshBalanceInBackground(address);
-      return { balanceEth: cached.balanceEth, balanceWei: cached.balanceWei };
+    const cached = await this.readDbBalance(normalizedAddress);
+    if (!cached) {
+      return null;
     }
 
-    // 3. No cache at all – fetch from RPC synchronously
-    const balance = await this.fetchBalance(address);
-    await this.persistBalance(address, balance);
+    const isStale = Date.now() - cached.updatedAt.getTime() >= BALANCE_STALE_MS;
+    if (!isStale) {
+      void this.writeRedisCache(normalizedAddress, cached.balanceEth, cached.balanceWei);
+    }
+
+    return { balanceEth: cached.balanceEth, balanceWei: cached.balanceWei, isStale };
+  }
+
+  async getBalance(address: string): Promise<BalanceResult> {
+    const normalizedAddress = normalizeAddress(address);
+    const cached = await this.getCachedBalance(normalizedAddress);
+
+    if (cached && !cached.isStale) {
+      return cached;
+    }
+
+    const lockAcquired = await this.acquireRefreshLock(normalizedAddress);
+    if (!lockAcquired && cached) {
+      return cached;
+    }
+
+    const balance = await this.fetchBalance(normalizedAddress);
+    await this.persistBalance(normalizedAddress, balance);
     return balance;
   }
 
-  /**
-   * Fetch balance from RPC provider.
-   */
+  private async readRedisCache(address: string): Promise<{ balanceEth: string; balanceWei: string; updatedAt: number } | null> {
+    return withRedis(
+      async (redis) => {
+        const raw = await redis.get(buildBalanceCacheKey(ETHEREUM_CHAIN, address));
+        if (!raw) return null;
+        return JSON.parse(raw) as { balanceEth: string; balanceWei: string; updatedAt: number };
+      },
+      async () => null,
+    );
+  }
+
+  private async readDbBalance(address: string): Promise<{ balanceEth: string; balanceWei: string; updatedAt: Date } | null> {
+    const wallet = await this.repo.findByAddress(address);
+    return wallet?.balanceUpdatedAt
+      ? { balanceEth: wallet.balanceEth!, balanceWei: wallet.balanceWei!, updatedAt: wallet.balanceUpdatedAt }
+      : null;
+  }
+
+  private async acquireRefreshLock(address: string): Promise<boolean> {
+    return withRedis(
+      async (redis) => {
+        const result = await redis.set(
+          buildBalanceRefreshLockKey(ETHEREUM_CHAIN, address),
+          '1',
+          'EX',
+          BALANCE_REFRESH_LOCK_TTL,
+          'NX',
+        );
+        return result === 'OK';
+      },
+      async () => true,
+    );
+  }
+
   private async fetchBalance(address: string): Promise<BalanceResult> {
     try {
       const balanceWei = await this.getProvider().getBalance(address);
       return {
         balanceWei: balanceWei.toString(),
         balanceEth: trimEthBalance(formatEther(balanceWei)),
+        isStale: false,
       };
     } catch (error) {
       if (error instanceof RateLimitError || error instanceof ServerError) {
@@ -155,32 +190,24 @@ export class WalletService {
     }
   }
 
-  /**
-   * Persist balance to DB and Redis cache.
-   */
   private async persistBalance(address: string, balance: BalanceResult): Promise<void> {
-    await this.repo.updateBalance(address, balance);
+    await this.repo.updateBalance(address, {
+      balanceEth: balance.balanceEth,
+      balanceWei: balance.balanceWei,
+    });
     await this.writeRedisCache(address, balance.balanceEth, balance.balanceWei);
   }
 
   private async writeRedisCache(address: string, balanceEth: string, balanceWei: string): Promise<void> {
-    void withRedis(
+    await withRedis(
       async (redis) => {
         const data = JSON.stringify({ balanceEth, balanceWei, updatedAt: Date.now() });
-        await redis.setex(`${BALANCE_CACHE_PREFIX}:${address}`, BALANCE_CACHE_TTL, data);
+        await redis.setex(buildBalanceCacheKey(ETHEREUM_CHAIN, address), BALANCE_CACHE_TTL, data);
       },
-      () => Promise.resolve(),
+      async () => undefined,
     );
   }
 
-  /**
-   * Fire-and-forget background refresh. Never throws to the caller.
-   */
-  private refreshBalanceInBackground(address: string): void {
-    void this.fetchBalance(address)
-      .then((balance) => this.persistBalance(address, balance))
-      .catch((err) => console.error(`[wallet] background balance refresh failed for ${address}:`, err));
-  }
 }
 
 export const walletService = new WalletService(new WalletRepository());

@@ -30,12 +30,23 @@ export async function withRedis<T>(
   fallback: () => Promise<T>,
 ): Promise<T> {
   try {
-    const client = getRedis();
-    return await fn(client);
-  } catch {
+    return await fn(getRedis());
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn('[redis] fallback:', message);
     return fallback();
   }
 }
 
-export const BALANCE_CACHE_TTL = 30; // seconds
+export const BALANCE_CACHE_TTL = 30;
+export const BALANCE_REFRESH_LOCK_TTL = 10;
 export const BALANCE_CACHE_PREFIX = 'wallet:balance';
+export const BALANCE_REFRESH_LOCK_PREFIX = 'wallet:balance:refresh-lock';
+
+export function buildBalanceCacheKey(chain: string, address: string): string {
+  return `${BALANCE_CACHE_PREFIX}:${chain}:${address.toLowerCase()}`;
+}
+
+export function buildBalanceRefreshLockKey(chain: string, address: string): string {
+  return `${BALANCE_REFRESH_LOCK_PREFIX}:${chain}:${address.toLowerCase()}`;
+}

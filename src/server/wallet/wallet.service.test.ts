@@ -98,16 +98,25 @@ describe('WalletService', () => {
   });
 
   describe('getBalance', () => {
-    beforeEach(() => {
-      process.env.ETHERSCAN_API_KEY = 'test-key';
+    it('should return formatted balance', async () => {
+      const getBalance = vi.fn().mockResolvedValue(BigInt('1234567890000000000'));
+      service = new WalletService(mockRepo, () => ({ getBalance }));
+
+      const result = await service.getBalance('0xabc');
+
+      expect(getBalance).toHaveBeenCalledWith('0xabc');
+      expect(result).toEqual({
+        balanceWei: '1234567890000000000',
+        balanceEth: '1.234567',
+      });
     });
 
     it('should throw RateLimitError on RPC failure', async () => {
-      vi.spyOn(WalletService.prototype as any, 'getProvider').mockImplementation(() => {
-        throw new Error('RPC error');
-      });
+      const getBalance = vi.fn().mockRejectedValue(new Error('RPC error'));
+      service = new WalletService(mockRepo, () => ({ getBalance }));
 
       await expect(service.getBalance('0xabc')).rejects.toThrow(RateLimitError);
+      await expect(service.getBalance('0xabc')).rejects.toThrow('Could not reach the Ethereum RPC endpoint.');
     });
   });
 });

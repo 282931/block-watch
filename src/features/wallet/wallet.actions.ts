@@ -3,7 +3,7 @@
 import { auth } from '@/auth';
 import { walletService } from '@/server/wallet/wallet.service';
 import { addWalletSchema } from '@/server/wallet/wallet.schema';
-import { ApiError, ValidationError } from '@/server/lib/errors';
+import { ApiError } from '@/server/lib/errors';
 import { revalidatePath } from 'next/cache';
 import type { AddWalletAddressState, WalletBalanceState } from '@/features/wallet/wallet.types';
 

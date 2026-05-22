@@ -34,9 +34,10 @@ export default function AddWalletAddressForm() {
       }
     };
 
-    (window.ethereum as any).on('accountsChanged', handleAccountsChanged);
+    window.ethereum.on('accountsChanged', handleAccountsChanged);
     return () => {
-      (window.ethereum as any).removeListener('accountsChanged', handleAccountsChanged);
+      if (typeof window.ethereum !== 'undefined')
+        window.ethereum.removeListener('accountsChanged', handleAccountsChanged);
     };
   }, []);
 
@@ -57,12 +58,12 @@ export default function AddWalletAddressForm() {
 
     setConnecting(true);
     try {
-      const accounts: string[] = await window.ethereum.request({ method: 'eth_requestAccounts' });
-      if (!accounts || accounts.length === 0) {
+      const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+      if (!Array.isArray(accounts) || accounts.length === 0) {
         setState({ error: 'No accounts found in your wallet.' });
         return;
       }
-      setWalletAccounts(accounts.map((a) => a.toLowerCase()));
+      setWalletAccounts(accounts.map((account) => String(account).toLowerCase()));
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to connect wallet';
       setState({ error: message });
@@ -166,7 +167,7 @@ export default function AddWalletAddressForm() {
                     ))}
                   </ul>
                   <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
-                    Only see one account? Open MetaMask &gt; click the three dots &gt; "Connected sites" &gt; add more accounts. The list auto-updates.
+                    Only see one account? Open MetaMask &gt; click the three dots &gt; &quot;Connected sites&quot; &gt; add more accounts. The list auto-updates.
                   </p>
                 </>
               )}

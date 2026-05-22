@@ -7,6 +7,20 @@ import type { WalletAddressWithBalance } from '@/features/wallet/wallet.types';
 
 const ETHEREUM_MAINNET_CHAIN_ID = 1;
 
+type BalanceProvider = {
+  getBalance(address: string): Promise<bigint>;
+};
+
+type BalanceProviderFactory = () => BalanceProvider;
+
+function createEtherscanProvider(): BalanceProvider {
+  const apiKey = process.env.ETHERSCAN_API_KEY;
+  if (!apiKey) {
+    throw new ServerError('Missing Etherscan API key.');
+  }
+  return new EtherscanProvider(ETHEREUM_MAINNET_CHAIN_ID, apiKey);
+}
+
 function trimEthBalance(balance: string): string {
   const [whole, fractional = ''] = balance.split('.');
   const trimmedFractional = fractional.replace(/0+$/, '').slice(0, 6);
@@ -14,17 +28,16 @@ function trimEthBalance(balance: string): string {
 }
 
 export class WalletService {
-  private provider: EtherscanProvider | null = null;
+  private provider: BalanceProvider | null = null;
 
-  constructor(private repo: WalletRepository) {}
+  constructor(
+    private repo: WalletRepository,
+    private createProvider: BalanceProviderFactory = createEtherscanProvider,
+  ) {}
 
-  private getProvider(): EtherscanProvider {
+  private getProvider(): BalanceProvider {
     if (!this.provider) {
-      const apiKey = process.env.ETHERSCAN_API_KEY;
-      if (!apiKey) {
-        throw new ServerError('Missing Etherscan API key.');
-      }
-      this.provider = new EtherscanProvider(ETHEREUM_MAINNET_CHAIN_ID, apiKey);
+      this.provider = this.createProvider();
     }
     return this.provider;
   }

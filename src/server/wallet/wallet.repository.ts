@@ -8,6 +8,11 @@ export type CreateWalletInput = {
   label: string | null;
 };
 
+export type BalanceData = {
+  balanceEth: string;
+  balanceWei: string;
+};
+
 export class WalletRepository {
   async findByUserId(userId: string): Promise<WalletAddress[]> {
     return prisma.walletAddress.findMany({
@@ -38,5 +43,22 @@ export class WalletRepository {
       select: { id: true },
     });
     return existing !== null;
+  }
+
+  async findByAddress(address: string): Promise<WalletAddress | null> {
+    return prisma.walletAddress.findFirst({
+      where: { address },
+    });
+  }
+
+  async updateBalance(address: string, balance: BalanceData): Promise<void> {
+    await prisma.walletAddress.updateMany({
+      where: { address },
+      data: {
+        balanceEth: balance.balanceEth,
+        balanceWei: balance.balanceWei,
+        balanceUpdatedAt: new Date(),
+      },
+    });
   }
 }

@@ -9,6 +9,7 @@ vi.mock('@/app/lib/db', () => {
       findFirst: vi.fn(),
       create: vi.fn(),
       deleteMany: vi.fn(),
+      updateMany: vi.fn(),
     },
   };
   return { default: mockPrisma };
@@ -22,6 +23,7 @@ const mockPrisma = prisma as unknown as {
     findFirst: ReturnType<typeof vi.fn>;
     create: ReturnType<typeof vi.fn>;
     deleteMany: ReturnType<typeof vi.fn>;
+    updateMany: ReturnType<typeof vi.fn>;
   };
 };
 
@@ -35,7 +37,8 @@ describe('WalletRepository', () => {
 
   describe('findByUserId', () => {
     it('should call prisma.walletAddress.findMany with correct params', async () => {
-      const mockWallets = [{ id: '1', userId: 'u1', address: '0xabc', chain: 'ethereum', label: null, createdAt: new Date() }];
+      const now = new Date();
+      const mockWallets = [{ id: '1', userId: 'u1', address: '0xabc', chain: 'ethereum', label: null, createdAt: now, balanceEth: '1.5', balanceWei: '1500000000000000000', balanceUpdatedAt: now }];
       mockPrisma.walletAddress.findMany.mockResolvedValue(mockWallets);
 
       const result = await repo.findByUserId('u1');
@@ -50,7 +53,8 @@ describe('WalletRepository', () => {
 
   describe('findByIdAndUser', () => {
     it('should call prisma.walletAddress.findFirst with correct params', async () => {
-      const mockWallet = { id: '1', userId: 'u1', address: '0xabc', chain: 'ethereum', label: null, createdAt: new Date() };
+      const now = new Date();
+      const mockWallet = { id: '1', userId: 'u1', address: '0xabc', chain: 'ethereum', label: null, createdAt: now, balanceEth: null, balanceWei: null, balanceUpdatedAt: null };
       mockPrisma.walletAddress.findFirst.mockResolvedValue(mockWallet);
 
       const result = await repo.findByIdAndUser('1', 'u1');
@@ -73,7 +77,7 @@ describe('WalletRepository', () => {
   describe('create', () => {
     it('should call prisma.walletAddress.create with correct data', async () => {
       const input = { userId: 'u1', address: '0xabc', chain: 'ethereum', label: null };
-      const created = { id: '1', ...input, createdAt: new Date() };
+      const created = { id: '1', ...input, createdAt: new Date(), balanceEth: null, balanceWei: null, balanceUpdatedAt: null };
       mockPrisma.walletAddress.create.mockResolvedValue(created);
 
       const result = await repo.create(input);
@@ -110,6 +114,39 @@ describe('WalletRepository', () => {
       const result = await repo.existsByUserAndAddress('u1', '0xnonexistent');
 
       expect(result).toBe(false);
+    });
+  });
+
+  describe('findByAddress', () => {
+    it('should call prisma.walletAddress.findFirst with address filter', async () => {
+      const now = new Date();
+      const mockWallet = { id: '1', userId: 'u1', address: '0xabc', chain: 'ethereum', label: null, createdAt: now, balanceEth: '1.5', balanceWei: '1500000000000000000', balanceUpdatedAt: now };
+      mockPrisma.walletAddress.findFirst.mockResolvedValue(mockWallet);
+
+      const result = await repo.findByAddress('0xabc');
+
+      expect(mockPrisma.walletAddress.findFirst).toHaveBeenCalledWith({
+        where: { address: '0xabc' },
+      });
+      expect(result).toEqual(mockWallet);
+    });
+  });
+
+  describe('updateBalance', () => {
+    it('should call prisma.walletAddress.updateMany with balance data', async () => {
+      const balance = { balanceEth: '2.0', balanceWei: '2000000000000000000' };
+      mockPrisma.walletAddress.updateMany.mockResolvedValue({ count: 1 });
+
+      await repo.updateBalance('0xabc', balance);
+
+      expect(mockPrisma.walletAddress.updateMany).toHaveBeenCalledWith({
+        where: { address: '0xabc' },
+        data: {
+          balanceEth: '2.0',
+          balanceWei: '2000000000000000000',
+          balanceUpdatedAt: expect.any(Date),
+        },
+      });
     });
   });
 });

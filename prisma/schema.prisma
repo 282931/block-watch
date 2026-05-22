@@ -52,6 +52,9 @@ model WalletAddress {
   chain     String   @default("ethereum")
   label     String?
   createdAt DateTime @default(now())
+  balanceEth        String?  @db.VarChar(78)
+  balanceWei        String?  @db.VarChar(78)
+  balanceUpdatedAt  DateTime?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 

@@ -4,6 +4,7 @@ import CopyAddressButton from './copy-address-button';
 import DeleteWalletAddressButton from './delete-wallet-address-button';
 
 export default async function WalletItem({ wallet }: { wallet: WalletAddressWithBalance }) {
+
   const balance = await walletService.getBalance(wallet.address).catch(() => null);
 
   return (
@@ -56,7 +57,6 @@ export function WalletPureItem({ wallet }: { wallet: WalletAddressWithBalance })
       Added {wallet.createdAt.toLocaleDateString()}
     </p>
   </div>
-
 
 }
 export function WalletSkeleton({ wallet }: { wallet: WalletAddressWithBalance }) {

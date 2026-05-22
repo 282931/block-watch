@@ -13,6 +13,7 @@ export type WalletAddressWithBalance = {
   createdAt: Date;
   balanceEth?: string;
   balanceWei?: string;
+  balanceUpdatedAt?: Date;
   balanceError?: string;
 };
 

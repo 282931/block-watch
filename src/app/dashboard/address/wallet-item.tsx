@@ -1,10 +1,10 @@
-import { WalletAddressWithBalance } from "../../lib/definitions";
-import { fetchEthereumBalance } from "../../lib/wallets";
-import CopyAddressButton from "./copy-address-button";
-import DeleteWalletAddressButton from "./delete-wallet-address-button";
+import { walletService } from '@/server/wallet/wallet.service';
+import type { WalletAddressWithBalance } from '@/features/wallet/wallet.types';
+import CopyAddressButton from './copy-address-button';
+import DeleteWalletAddressButton from './delete-wallet-address-button';
 
 export default async function WalletItem({ wallet }: { wallet: WalletAddressWithBalance }) {
-  const balance = await fetchEthereumBalance(wallet.address).catch(() => null);
+  const balance = await walletService.getBalance(wallet.address).catch(() => null);
 
   return (
     <li

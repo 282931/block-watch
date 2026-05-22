@@ -1,5 +1,5 @@
 import { auth } from '@/auth';
-import { getWalletAddresses } from '@/app/lib/wallets';
+import { walletService } from '@/server/wallet/wallet.service';
 import AddWalletAddressForm from './add-wallet-address-form';
 import WalletItem, { WalletSkeleton } from './wallet-item';
 import { Suspense } from 'react';
@@ -7,7 +7,7 @@ import { Suspense } from 'react';
 export default async function Page() {
   const session = await auth();
   const wallets = session?.user?.id
-    ? await getWalletAddresses(session.user.id)
+    ? await walletService.listWallets(session.user.id)
     : [];
 
   return (

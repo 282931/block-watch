@@ -1,36 +1,9 @@
 'use server';
 import { AuthError } from 'next-auth';
 import { signIn, signOut } from '@/auth';
-import { auth } from '@/auth';
 import bcrypt from 'bcryptjs';
 import prisma from '@/app/lib/db';
 import { z } from 'zod';
-import { revalidatePath } from 'next/cache';
-import type { AddWalletAddressState, WalletBalanceState } from '@/app/lib/definitions';
-import {
-  fetchEthereumBalance,
-  normalizeWalletAddress,
-} from '@/app/lib/wallets';
-
-const walletAddressInputSchema = z
-  .string()
-  .trim()
-  .regex(/^0x[a-fA-F0-9]{40}$/, 'Please enter a valid EVM wallet address.');
-
-const walletLabelInputSchema = z
-  .string()
-  .trim()
-  .max(80, 'Label must be 80 characters or fewer.')
-  .optional();
-
-function isUniqueConstraintError(error: unknown) {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    'code' in error &&
-    error.code === 'P2002'
-  );
-}
 
 export async function authenticate(
   _prevState: string | undefined,
@@ -61,7 +34,7 @@ export async function register(
     const confirmPassword = formData.get('confirmPassword');
 
     const parsedCredentials = z
-      .object({ email: z.string().email(), password: z.string().min(6) })
+      .object({ email: z.email(), password: z.string().min(6) })
       .safeParse({ email, password });
 
     if (!parsedCredentials.success) {
@@ -114,104 +87,4 @@ export async function register(
 
 export async function logout() {
   await signOut({ redirectTo: '/login' });
-}
-
-export async function addWalletAddress(
-  _prevState: AddWalletAddressState,
-  formData: FormData,
-): Promise<AddWalletAddressState> {
-  const session = await auth();
-
-  if (!session?.user?.id) {
-    return { error: 'Please log in to add a wallet address.' };
-  }
-
-  const parsedAddress = walletAddressInputSchema.safeParse(formData.get('address'));
-  const parsedLabel = walletLabelInputSchema.safeParse(formData.get('label'));
-
-  if (!parsedAddress.success) {
-    return { error: parsedAddress.error.issues[0]?.message ?? 'Invalid wallet address.' };
-  }
-
-  if (!parsedLabel.success) {
-    return { error: parsedLabel.error.issues[0]?.message ?? 'Invalid label.' };
-  }
-
-  const address = normalizeWalletAddress(parsedAddress.data);
-  const label = parsedLabel.data || null;
-
-  try {
-    await prisma.walletAddress.create({
-      data: {
-        userId: session.user.id,
-        address,
-        label,
-        chain: 'ethereum',
-      },
-    });
-  } catch (error) {
-    if (isUniqueConstraintError(error)) {
-      return { error: 'This wallet address is already in your list.' };
-    }
-
-    console.error('Failed to add wallet address:', error);
-    return { error: 'Could not add this wallet address.' };
-  }
-
-  revalidatePath('/dashboard/address');
-  return { success: true };
-}
-
-export async function deleteWalletAddress(formData: FormData) {
-  const session = await auth();
-
-  if (!session?.user?.id) {
-    return;
-  }
-
-  const walletId = formData.get('walletId');
-
-  if (typeof walletId !== 'string' || !walletId) {
-    return;
-  }
-
-  await prisma.walletAddress.deleteMany({
-    where: {
-      id: walletId,
-      userId: session.user.id,
-    },
-  });
-
-  revalidatePath('/dashboard/address');
-}
-
-export async function getWalletBalance(
-  _prevState: WalletBalanceState,
-  formData: FormData,
-): Promise<WalletBalanceState> {
-  const session = await auth();
-
-  if (!session?.user) {
-    return { error: 'Please log in to check a wallet balance.' };
-  }
-
-  const parsedAddress = walletAddressInputSchema.safeParse(formData.get('address'));
-
-  if (!parsedAddress.success) {
-    return { error: parsedAddress.error.issues[0]?.message ?? 'Invalid wallet address.' };
-  }
-
-  const address = normalizeWalletAddress(parsedAddress.data);
-
-  try {
-    const balance = await fetchEthereumBalance(address);
-
-    return {
-      address,
-      ...balance,
-    };
-  } catch (error) {
-    console.error('Wallet balance lookup failed:', error);
-    return { address, error: 'Could not reach the Ethereum RPC endpoint.' };
-  }
 }

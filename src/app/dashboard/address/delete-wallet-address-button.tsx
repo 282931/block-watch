@@ -1,7 +1,7 @@
 'use client';
 
 import { TrashIcon } from '@heroicons/react/24/outline';
-import { deleteWalletAddress } from '@/app/lib/actions';
+import { deleteWalletAction as deleteWalletAddress } from '@/features/wallet/wallet.actions';
 import { useRef } from 'react';
 
 type DeleteWalletAddressButtonProps = {

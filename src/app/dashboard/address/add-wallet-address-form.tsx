@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState, useTransition } from 'react';
+import { useEffect, useRef, useState, useTransition } from 'react';
 import {
   ExclamationCircleIcon,
   PlusIcon,
@@ -9,9 +9,8 @@ import {
   XMarkIcon,
 } from '@heroicons/react/24/outline';
 import { Button } from '@/app/ui/button';
-import { addWalletAddress } from '@/app/lib/actions';
-import type { AddWalletAddressState } from '@/app/lib/definitions';
-import { BrowserProvider } from 'ethers';
+import { addWalletAction } from '@/features/wallet/wallet.actions';
+import type { AddWalletAddressState } from '@/features/wallet/wallet.types';
 
 const initialState: AddWalletAddressState = {};
 
@@ -22,6 +21,24 @@ export default function AddWalletAddressForm() {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const addressRef = useRef<HTMLInputElement>(null);
   const [connecting, setConnecting] = useState(false);
+  const [walletAccounts, setWalletAccounts] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (typeof window.ethereum === 'undefined') return;
+
+    const handleAccountsChanged = (accounts: unknown) => {
+      if (Array.isArray(accounts) && accounts.length > 0) {
+        setWalletAccounts(accounts.map((a) => String(a).toLowerCase()));
+      } else {
+        setWalletAccounts([]);
+      }
+    };
+
+    (window.ethereum as any).on('accountsChanged', handleAccountsChanged);
+    return () => {
+      (window.ethereum as any).removeListener('accountsChanged', handleAccountsChanged);
+    };
+  }, []);
 
   function handleOpen() {
     setState(initialState);
@@ -40,17 +57,23 @@ export default function AddWalletAddressForm() {
 
     setConnecting(true);
     try {
-      const provider = new BrowserProvider(window.ethereum);
-      const signer = await provider.getSigner();
-      const address = await signer.getAddress();
-      if (addressRef.current) {
-        addressRef.current.value = address.toLowerCase();
+      const accounts: string[] = await window.ethereum.request({ method: 'eth_requestAccounts' });
+      if (!accounts || accounts.length === 0) {
+        setState({ error: 'No accounts found in your wallet.' });
+        return;
       }
+      setWalletAccounts(accounts.map((a) => a.toLowerCase()));
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to connect wallet';
       setState({ error: message });
     } finally {
       setConnecting(false);
+    }
+  }
+
+  function handleSelectAccount(address: string) {
+    if (addressRef.current) {
+      addressRef.current.value = address;
     }
   }
 
@@ -83,7 +106,7 @@ export default function AddWalletAddressForm() {
             ref={formRef}
             action={(formData) => {
               startTransition(async () => {
-                const result = await addWalletAddress(initialState, formData);
+                const result = await addWalletAction(initialState, formData);
                 setState(result);
 
                 if (result.success) {
@@ -123,9 +146,30 @@ export default function AddWalletAddressForm() {
                   title="Connect wallet to fill address"
                   className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md px-2 py-1 text-xs font-medium text-white transition bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {connecting ? '...' : 'Connect'}
+                  {connecting ? '...' : walletAccounts.length > 0 ? '✓' : 'Connect'}
                 </button>
               </div>
+              {walletAccounts.length > 0 && (
+                <>
+                  <ul className="mt-2 divide-y divide-gray-100 rounded-md border border-gray-200 bg-gray-50 dark:divide-gray-700 dark:border-gray-700 dark:bg-gray-950">
+                    {walletAccounts.map((acc) => (
+                      <li key={acc}>
+                        <button
+                          type="button"
+                          onClick={() => handleSelectAccount(acc)}
+                          className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-mono text-gray-700 transition hover:bg-blue-50 hover:text-blue-700 dark:text-gray-300 dark:hover:bg-blue-950 dark:hover:text-blue-300"
+                        >
+                          <WalletIcon className="h-4 w-4 shrink-0 text-gray-400" />
+                          <span className="truncate">{acc}</span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                    Only see one account? Open MetaMask &gt; click the three dots &gt; "Connected sites" &gt; add more accounts. The list auto-updates.
+                  </p>
+                </>
+              )}
             </div>
 
             <div>

@@ -39,14 +39,8 @@ export async function withRedis<T>(
 }
 
 export const BALANCE_CACHE_TTL = 30;
-export const BALANCE_REFRESH_LOCK_TTL = 10;
 export const BALANCE_CACHE_PREFIX = 'wallet:balance';
-export const BALANCE_REFRESH_LOCK_PREFIX = 'wallet:balance:refresh-lock';
 
 export function buildBalanceCacheKey(chain: string, address: string): string {
   return `${BALANCE_CACHE_PREFIX}:${chain}:${address.toLowerCase()}`;
-}
-
-export function buildBalanceRefreshLockKey(chain: string, address: string): string {
-  return `${BALANCE_REFRESH_LOCK_PREFIX}:${chain}:${address.toLowerCase()}`;
 }

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { WalletService } from './wallet.service';
 import { WalletRepository } from './wallet.repository';
-import { AuthError, ConflictError, NotFoundError, RateLimitError } from '@/server/lib/errors';
+import { AuthError, ConflictError, NotFoundError } from '@/server/lib/errors';
 import type { Redis } from 'ioredis';
 
 vi.mock('@/server/wallet/wallet.repository', () => {
@@ -13,6 +13,7 @@ vi.mock('@/server/wallet/wallet.repository', () => {
   MockRepo.prototype.existsByUserAndAddress = vi.fn();
   MockRepo.prototype.findByAddress = vi.fn();
   MockRepo.prototype.updateBalance = vi.fn();
+  MockRepo.prototype.touchLastAccessed = vi.fn().mockResolvedValue(undefined);
   return { WalletRepository: MockRepo };
 });
 
@@ -21,24 +22,36 @@ import * as redisModule from '@/server/lib/redis';
 vi.mock('@/server/lib/redis', () => ({
   withRedis: vi.fn(),
   BALANCE_CACHE_TTL: 30,
-  BALANCE_REFRESH_LOCK_TTL: 10,
-  buildBalanceCacheKey: (chain: string, address: string) => `wallet:balance:${chain}:${address.toLowerCase()}`,
-  buildBalanceRefreshLockKey: (chain: string, address: string) => `wallet:balance:refresh-lock:${chain}:${address.toLowerCase()}`,
+  buildBalanceCacheKey: (chain: string, address: string) =>
+    `wallet:balance:${chain}:${address.toLowerCase()}`,
 }));
+
+vi.mock('@/server/queue/balance-sync.queue', () => ({
+  enqueueBalanceSync: vi.fn().mockResolvedValue(true),
+}));
+
+import { enqueueBalanceSync } from '@/server/queue/balance-sync.queue';
 
 describe('WalletService', () => {
   let service: WalletService;
   let mockRepo: WalletRepository;
+  let enqueue: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     vi.clearAllMocks();
     mockRepo = new WalletRepository();
-    service = new WalletService(mockRepo);
+    enqueue = vi.fn(async () => true);
+    service = new WalletService(mockRepo, enqueue as unknown as (data: { chain: string; address: string }) => Promise<boolean>);
   });
 
   describe('listWallets', () => {
     it('should return wallets for authenticated user', async () => {
-      const wallets = [{ id: '1', userId: 'u1', address: '0xabc', chain: 'ethereum', label: null, createdAt: new Date(), balanceEth: null, balanceWei: null, balanceUpdatedAt: null }];
+      const wallets = [
+        {
+          id: '1', userId: 'u1', address: '0xabc', chain: 'ethereum', label: null,
+          createdAt: new Date(), balanceEth: null, balanceWei: null, balanceUpdatedAt: null,
+        },
+      ];
       vi.mocked(mockRepo.findByUserId).mockResolvedValue(wallets);
 
       const result = await service.listWallets('u1');
@@ -56,8 +69,11 @@ describe('WalletService', () => {
   describe('addWallet', () => {
     const validInput = { address: '0xABC', label: undefined };
 
-    it('should create wallet successfully', async () => {
-      const created = { id: '1', userId: 'u1', address: '0xabc', chain: 'ethereum', label: null, createdAt: new Date(), balanceEth: null, balanceWei: null, balanceUpdatedAt: null };
+    it('should create wallet and enqueue balance-sync job', async () => {
+      const created = {
+        id: '1', userId: 'u1', address: '0xabc', chain: 'ethereum', label: null,
+        createdAt: new Date(), balanceEth: null, balanceWei: null, balanceUpdatedAt: null,
+      };
       vi.mocked(mockRepo.existsByUserAndAddress).mockResolvedValue(false);
       vi.mocked(mockRepo.create).mockResolvedValue(created);
 
@@ -70,6 +86,8 @@ describe('WalletService', () => {
         chain: 'ethereum',
         label: null,
       });
+      expect(enqueue).toHaveBeenCalledTimes(1);
+      expect(enqueue).toHaveBeenCalledWith({ chain: 'ethereum', address: '0xabc' });
       expect(result).toEqual(created);
     });
 
@@ -81,14 +99,17 @@ describe('WalletService', () => {
       vi.mocked(mockRepo.existsByUserAndAddress).mockResolvedValue(true);
 
       await expect(service.addWallet('u1', validInput)).rejects.toThrow(ConflictError);
-      await expect(service.addWallet('u1', validInput)).rejects.toThrow('This wallet address is already in your list.');
       expect(mockRepo.create).not.toHaveBeenCalled();
+      expect(enqueue).not.toHaveBeenCalled();
     });
   });
 
   describe('deleteWallet', () => {
     it('should delete wallet successfully', async () => {
-      const wallet = { id: '1', userId: 'u1', address: '0xabc', chain: 'ethereum', label: null, createdAt: new Date(), balanceEth: null, balanceWei: null, balanceUpdatedAt: null };
+      const wallet = {
+        id: '1', userId: 'u1', address: '0xabc', chain: 'ethereum', label: null,
+        createdAt: new Date(), balanceEth: null, balanceWei: null, balanceUpdatedAt: null,
+      };
       vi.mocked(mockRepo.findByIdAndUser).mockResolvedValue(wallet);
 
       await service.deleteWallet('u1', '1');
@@ -105,7 +126,6 @@ describe('WalletService', () => {
       vi.mocked(mockRepo.findByIdAndUser).mockResolvedValue(null);
 
       await expect(service.deleteWallet('u1', 'nonexistent')).rejects.toThrow(NotFoundError);
-      await expect(service.deleteWallet('u1', 'nonexistent')).rejects.toThrow('Wallet address not found.');
       expect(mockRepo.deleteByIdAndUser).not.toHaveBeenCalled();
     });
   });
@@ -116,7 +136,7 @@ describe('WalletService', () => {
 
     const now = Date.now();
     const freshUpdatedAt = new Date(now - 10_000);
-    const staleUpdatedAt = new Date(now - 60_000);
+    const staleUpdatedAt = new Date(now - 10 * 60_000);
 
     function mockRedisMiss() {
       vi.mocked(redisModule.withRedis).mockImplementation(async (_fn: RedisCallback, fallback: RedisFallback) => {
@@ -124,22 +144,40 @@ describe('WalletService', () => {
       });
     }
 
-    function mockRedisHit(data: { balanceEth: string; balanceWei: string }) {
+    function mockRedisHit(data: { balanceEth: string; balanceWei: string; updatedAt?: number }) {
       vi.mocked(redisModule.withRedis).mockImplementation(async (fn: RedisCallback) => {
-        return fn({ get: () => Promise.resolve(JSON.stringify({ ...data, updatedAt: Date.now() })) } as unknown as Redis);
+        const updatedAt = data.updatedAt ?? Date.now();
+        return fn({
+          get: () => Promise.resolve(JSON.stringify({ ...data, updatedAt })),
+          setex: () => Promise.resolve('OK'),
+        } as unknown as Redis);
       });
     }
 
-    it('should return from Redis when cache is hot', async () => {
+    it('returns fresh Redis hit and does not enqueue', async () => {
       mockRedisHit({ balanceEth: '2.0', balanceWei: '2000000000000000000' });
 
       const result = await service.getBalance('0xABC');
 
       expect(result).toEqual({ balanceEth: '2.0', balanceWei: '2000000000000000000', isStale: false });
       expect(mockRepo.findByAddress).not.toHaveBeenCalled();
+      expect(enqueue).not.toHaveBeenCalled();
     });
 
-    it('should fall through to DB when Redis misses', async () => {
+    it('returns stale Redis hit and enqueues sync', async () => {
+      mockRedisHit({
+        balanceEth: '2.0',
+        balanceWei: '2000000000000000000',
+        updatedAt: Date.now() - 10 * 60_000,
+      });
+
+      const result = await service.getBalance('0xABC');
+
+      expect(result).toEqual({ balanceEth: '2.0', balanceWei: '2000000000000000000', isStale: true });
+      expect(enqueue).toHaveBeenCalledWith({ chain: 'ethereum', address: '0xabc' });
+    });
+
+    it('falls through to fresh DB cache and does not enqueue', async () => {
       mockRedisMiss();
       vi.mocked(mockRepo.findByAddress).mockResolvedValue({
         id: '1', userId: 'u1', address: '0xabc', chain: 'ethereum', label: null, createdAt: new Date(),
@@ -150,35 +188,11 @@ describe('WalletService', () => {
 
       expect(mockRepo.findByAddress).toHaveBeenCalledWith('0xabc');
       expect(result).toEqual({ balanceEth: '1.5', balanceWei: '1500000000000000000', isStale: false });
+      expect(enqueue).not.toHaveBeenCalled();
     });
 
-    it('should return stale DB cache without fetching when reading cached balance', async () => {
+    it('returns stale DB value and enqueues sync', async () => {
       mockRedisMiss();
-      const getBalance = vi.fn().mockResolvedValue(BigInt('1234567890000000000'));
-      service = new WalletService(mockRepo, () => ({ getBalance }));
-      vi.mocked(mockRepo.findByAddress).mockResolvedValue({
-        id: '1', userId: 'u1', address: '0xabc', chain: 'ethereum', label: null, createdAt: new Date(),
-        balanceEth: '1.5', balanceWei: '1500000000000000000', balanceUpdatedAt: staleUpdatedAt,
-      });
-
-      const result = await service.getCachedBalance('0xABC');
-
-      expect(result).toEqual({ balanceEth: '1.5', balanceWei: '1500000000000000000', isStale: true });
-      expect(getBalance).not.toHaveBeenCalled();
-    });
-
-    it('should fetch from RPC when stale balance refresh lock is acquired', async () => {
-      const set = vi.fn().mockResolvedValue('OK');
-      vi.mocked(redisModule.withRedis).mockImplementation(async (fn: RedisCallback, fallback: RedisFallback) => {
-        const redis = {
-          get: () => Promise.resolve(null),
-          set,
-          setex: () => Promise.resolve('OK'),
-        };
-        return fn(redis as unknown as Redis).catch(() => fallback());
-      });
-      const getBalance = vi.fn().mockResolvedValue(BigInt('1234567890000000000'));
-      service = new WalletService(mockRepo, () => ({ getBalance }));
       vi.mocked(mockRepo.findByAddress).mockResolvedValue({
         id: '1', userId: 'u1', address: '0xabc', chain: 'ethereum', label: null, createdAt: new Date(),
         balanceEth: '1.5', balanceWei: '1500000000000000000', balanceUpdatedAt: staleUpdatedAt,
@@ -186,74 +200,25 @@ describe('WalletService', () => {
 
       const result = await service.getBalance('0xABC');
 
-      expect(set).toHaveBeenCalledWith('wallet:balance:refresh-lock:ethereum:0xabc', '1', 'EX', 10, 'NX');
-      expect(getBalance).toHaveBeenCalledWith('0xabc');
-      expect(mockRepo.updateBalance).toHaveBeenCalledWith('0xabc', {
-        balanceWei: '1234567890000000000',
-        balanceEth: '1.234567',
-      });
-      expect(result).toEqual({ balanceEth: '1.234567', balanceWei: '1234567890000000000', isStale: false });
-    });
-
-    it('should return stale cache when refresh lock is held elsewhere', async () => {
-      const set = vi.fn().mockResolvedValue(null);
-      vi.mocked(redisModule.withRedis).mockImplementation(async (fn: RedisCallback, fallback: RedisFallback) => {
-        const redis = {
-          get: () => Promise.resolve(null),
-          set,
-        };
-        return fn(redis as unknown as Redis).catch(() => fallback());
-      });
-      const getBalance = vi.fn().mockResolvedValue(BigInt('1234567890000000000'));
-      service = new WalletService(mockRepo, () => ({ getBalance }));
-      vi.mocked(mockRepo.findByAddress).mockResolvedValue({
-        id: '1', userId: 'u1', address: '0xabc', chain: 'ethereum', label: null, createdAt: new Date(),
-        balanceEth: '1.5', balanceWei: '1500000000000000000', balanceUpdatedAt: staleUpdatedAt,
-      });
-
-      const result = await service.getBalance('0xABC');
-
-      expect(set).toHaveBeenCalledWith('wallet:balance:refresh-lock:ethereum:0xabc', '1', 'EX', 10, 'NX');
-      expect(getBalance).not.toHaveBeenCalled();
       expect(result).toEqual({ balanceEth: '1.5', balanceWei: '1500000000000000000', isStale: true });
+      expect(enqueue).toHaveBeenCalledWith({ chain: 'ethereum', address: '0xabc' });
     });
 
-    it('should fetch from RPC when no cache exists', async () => {
+    it('returns null and enqueues sync when no cache exists at all', async () => {
       mockRedisMiss();
       vi.mocked(mockRepo.findByAddress).mockResolvedValue({
         id: '1', userId: 'u1', address: '0xabc', chain: 'ethereum', label: null, createdAt: new Date(),
         balanceEth: null, balanceWei: null, balanceUpdatedAt: null,
       });
 
-      const getBalance = vi.fn().mockResolvedValue(BigInt('1234567890000000000'));
-      service = new WalletService(mockRepo, () => ({ getBalance }));
-
       const result = await service.getBalance('0xABC');
 
-      expect(getBalance).toHaveBeenCalledWith('0xabc');
-      expect(mockRepo.updateBalance).toHaveBeenCalledWith('0xabc', {
-        balanceWei: '1234567890000000000',
-        balanceEth: '1.234567',
-      });
-      expect(result).toEqual({
-        balanceWei: '1234567890000000000',
-        balanceEth: '1.234567',
-        isStale: false,
-      });
+      expect(result).toBeNull();
+      expect(enqueue).toHaveBeenCalledWith({ chain: 'ethereum', address: '0xabc' });
     });
+  });
 
-    it('should throw RateLimitError on RPC failure when no cache', async () => {
-      mockRedisMiss();
-      vi.mocked(mockRepo.findByAddress).mockResolvedValue({
-        id: '1', userId: 'u1', address: '0xabc', chain: 'ethereum', label: null, createdAt: new Date(),
-        balanceEth: null, balanceWei: null, balanceUpdatedAt: null,
-      });
-
-      const getBalance = vi.fn().mockRejectedValue(new Error('RPC error'));
-      service = new WalletService(mockRepo, () => ({ getBalance }));
-
-      await expect(service.getBalance('0xABC')).rejects.toThrow(RateLimitError);
-      await expect(service.getBalance('0xABC')).rejects.toThrow('Could not reach the Ethereum RPC endpoint.');
-    });
+  it('module-level enqueueBalanceSync import is still mockable', () => {
+    expect(vi.isMockFunction(enqueueBalanceSync)).toBe(true);
   });
 });

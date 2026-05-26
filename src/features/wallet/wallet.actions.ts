@@ -86,12 +86,16 @@ export async function getWalletBalanceAction(
 
   try {
     const balance = await walletService.getBalance(address);
+    if (!balance) {
+      // Worker is warming the address; UI will keep polling.
+      return { address, isStale: true };
+    }
     return { address, ...balance };
   } catch (error) {
     if (error instanceof ApiError) {
       return { address, error: error.message };
     }
     console.error('Wallet balance lookup failed:', error);
-    return { address, error: 'Could not reach the Ethereum RPC endpoint.' };
+    return { address, isStale: true };
   }
 }

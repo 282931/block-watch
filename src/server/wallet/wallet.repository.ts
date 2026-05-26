@@ -21,6 +21,22 @@ export class WalletRepository {
     });
   }
 
+  /**
+   * Return every distinct wallet address tracked across all users.
+   *
+   * Used by the balance-scheduler to fan out periodic refresh jobs.
+   */
+  async findAllDistinctAddresses(
+    accessedSince?: Date,
+  ): Promise<Array<{ chain: string; address: string }>> {
+    const rows = await prisma.walletAddress.findMany({
+      where: accessedSince ? { lastAccessedAt: { gte: accessedSince } } : undefined,
+      select: { chain: true, address: true },
+      distinct: ['chain', 'address'],
+    });
+    return rows;
+  }
+
   async findByIdAndUser(id: string, userId: string): Promise<WalletAddress | null> {
     return prisma.walletAddress.findFirst({
       where: { id, userId },
@@ -59,6 +75,20 @@ export class WalletRepository {
         balanceWei: balance.balanceWei,
         balanceUpdatedAt: new Date(),
       },
+    });
+  }
+
+  /**
+   * Bump `lastAccessedAt` for every wallet row matching the given address.
+   *
+   * Called on every read so the scheduler can skip wallets that nobody has
+   * looked at recently. Safe to fire-and-forget; failures should never block
+   * the read path.
+   */
+  async touchLastAccessed(address: string, at: Date = new Date()): Promise<void> {
+    await prisma.walletAddress.updateMany({
+      where: { address },
+      data: { lastAccessedAt: at },
     });
   }
 }

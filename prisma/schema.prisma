@@ -55,8 +55,13 @@ model WalletAddress {
   balanceEth        String?  @db.VarChar(78)
   balanceWei        String?  @db.VarChar(78)
   balanceUpdatedAt  DateTime?
+  // Tracks the most recent time anyone read this wallet's balance via the
+  // service. The scheduler uses this to skip cold addresses that nobody is
+  // looking at, keeping the periodic fan-out small.
+  lastAccessedAt    DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, address])
+  @@index([chain, lastAccessedAt])
 }

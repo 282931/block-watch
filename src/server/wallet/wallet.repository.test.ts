@@ -149,4 +149,45 @@ describe('WalletRepository', () => {
       });
     });
   });
+
+  describe('findAllDistinctAddresses', () => {
+    it('passes an accessedSince filter when provided', async () => {
+      const cutoff = new Date('2024-01-01T00:00:00Z');
+      mockPrisma.walletAddress.findMany.mockResolvedValue([]);
+
+      await repo.findAllDistinctAddresses(cutoff);
+
+      expect(mockPrisma.walletAddress.findMany).toHaveBeenCalledWith({
+        where: { lastAccessedAt: { gte: cutoff } },
+        select: { chain: true, address: true },
+        distinct: ['chain', 'address'],
+      });
+    });
+
+    it('omits the filter when no cutoff is given', async () => {
+      mockPrisma.walletAddress.findMany.mockResolvedValue([]);
+
+      await repo.findAllDistinctAddresses();
+
+      expect(mockPrisma.walletAddress.findMany).toHaveBeenCalledWith({
+        where: undefined,
+        select: { chain: true, address: true },
+        distinct: ['chain', 'address'],
+      });
+    });
+  });
+
+  describe('touchLastAccessed', () => {
+    it('bumps lastAccessedAt for every row matching the address', async () => {
+      const at = new Date('2024-06-01T00:00:00Z');
+      mockPrisma.walletAddress.updateMany.mockResolvedValue({ count: 1 });
+
+      await repo.touchLastAccessed('0xabc', at);
+
+      expect(mockPrisma.walletAddress.updateMany).toHaveBeenCalledWith({
+        where: { address: '0xabc' },
+        data: { lastAccessedAt: at },
+      });
+    });
+  });
 });

@@ -15,7 +15,12 @@
       "Bash(pnpm test *)",
       "Bash(pnpm dev *)",
       "Skill(browser-use)",
-      "Bash(pnpm build *)"
+      "Bash(pnpm build *)",
+      "Bash(docker context show *)",
+      "Bash(docker version *)",
+      "Bash(node *)",
+      "Bash(nc *)",
+      "Bash(docker exec redis-study *)"
     ]
   }
 }
